@@ -30,7 +30,9 @@ var (
 	kubernetesConfigFlags = genericclioptions.NewConfigFlags(false) // Flags for configuring the Kubernetes client.
 
 	openAIDeploymentName = flag.String("openai-deployment-name", env.GetOr("OPENAI_DEPLOYMENT_NAME", env.String, "gpt-3.5-turbo-0301"), "The deployment name used for the model in OpenAI service.")                                                                                               // The name of the deployment used for the OpenAI model.
-	openAIAPIKey         = flag.String("openai-api-key", env.GetOr("OPENAI_API_KEY", env.String, ""), "The API key for the OpenAI service. This is required.")                                                                                                                                     // The API key for the OpenAI service.
+	openAIAPIKey         = flag.String("openai-api-key", env.GetOr("OPENAI_API_KEY", env.String, ""), "The API key for the OpenAI service. Required if not using Gemini.")                                                                                                                       // The API key for the OpenAI service.
+	geminiAPIKey         = flag.String("gemini-api-key", env.GetOr("GEMINI_API_KEY", env.String, ""), "The API key for Google Gemini (Google AI Studio). Use this for free tier; required if not using OpenAI.")                                                                                    // The API key for Gemini.
+	geminiModel          = flag.String("gemini-model", env.GetOr("GEMINI_MODEL", env.String, "gemini-2.5-flash"), "The Gemini model name (e.g. gemini-2.5-flash, gemini-2.0-flash).")                                                                                                             // The Gemini model to use.
 	openAIEndpoint       = flag.String("openai-endpoint", env.GetOr("OPENAI_ENDPOINT", env.String, openaiAPIURLv1), "The endpoint for OpenAI service. Defaults to"+openaiAPIURLv1+". Set this to your Local AI endpoint or Azure OpenAI Service, if needed.")                                      // The endpoint for the OpenAI service.
 	azureModelMap        = flag.StringToString("azure-openai-map", env.GetOr("AZURE_OPENAI_MAP", env.Map(env.String, "=", env.String, ""), map[string]string{}), "The mapping from OpenAI model to Azure OpenAI deployment. Defaults to empty map. Example format: gpt-3.5-turbo=my-deployment.")  // The mapping from OpenAI model to Azure OpenAI deployment.
 	requireConfirmation  = flag.Bool("require-confirmation", env.GetOr("REQUIRE_CONFIRMATION", strconv.ParseBool, true), "Whether to require confirmation before executing the command. Defaults to true.")                                                                                        // Whether to require confirmation before executing the command.
@@ -42,12 +44,15 @@ var (
 )
 
 // InitAndExecute initializes the application and executes the root command.
-// It checks if the OpenAI key is provided and exits if it is not.
-// It then executes the root command.
+// It requires either an OpenAI key or a Gemini key and exits if neither is provided.
 //this is the function that's being called from main.go file
 func InitAndExecute() {
-	if *openAIAPIKey == "" {
-		fmt.Println("Please provide an OpenAI key.")
+	if *openAIAPIKey == "" && *geminiAPIKey == "" {
+		fmt.Println("Please provide an OpenAI key (OPENAI_API_KEY) or a Gemini key (GEMINI_API_KEY).")
+		os.Exit(1)
+	}
+	if *openAIAPIKey != "" && *geminiAPIKey != "" {
+		fmt.Println("Please provide only one: OPENAI_API_KEY or GEMINI_API_KEY, not both.")
 		os.Exit(1)
 	}
 
@@ -101,6 +106,22 @@ func RootCmd() *cobra.Command {
 	// Add Kubernetes configuration flags to the command
 	kubernetesConfigFlags.AddFlags(cmd.PersistentFlags())
 
+	// Port for serve subcommand (so --port is recognized when running "serve")
+	var portForServe int
+	cmd.PersistentFlags().IntVar(&portForServe, "port", 8080, "Port for HTTP server (use with 'serve')")
+
+	// Serve command: HTTP API for React or other clients
+	serveCmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start HTTP API server for generating manifests",
+		Long:  "Start a server that accepts POST /generate with JSON body {\"prompt\": \"...\"} and returns {\"yaml\": \"...\"}. Call from React or Postman.",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			setServePort(portForServe)
+			return runServe()
+		},
+	}
+	cmd.AddCommand(serveCmd)
+
 	return cmd //cmd is of type cobra.Command, a struct in the cobra package
 }
 
@@ -109,13 +130,20 @@ func RootCmd() *cobra.Command {
 //from the logrus library prints te various flags with their values
 //basically printing out the variables we have set above in this file
 func printDebugFlags() {
-	log.Debugf("openai-endpoint: %s", *openAIEndpoint)
-	log.Debugf("openai-deployment-name: %s", *openAIDeploymentName)
-	log.Debugf("azure-openai-map: %s", *azureModelMap)
+	if *geminiAPIKey != "" {
+		log.Debugf("gemini-model: %s", *geminiModel)
+	} else {
+		log.Debugf("openai-endpoint: %s", *openAIEndpoint)
+		log.Debugf("openai-deployment-name: %s", *openAIDeploymentName)
+		log.Debugf("azure-openai-map: %s", *azureModelMap)
+	}
 	log.Debugf("temperature: %f", *temperature)
 	log.Debugf("use-k8s-api: %t", *usek8sAPI)
 	log.Debugf("k8s-openapi-url: %s", *k8sOpenAPIURL)
 }
+
+// useGemini returns true when Gemini API key is set (and thus OpenAI is not used).
+func useGemini() bool { return *geminiAPIKey != "" }
 
 //main -> initandExecute -> RootCmd -> run function this is how execution is
 // run is the main function that executes the CLI command.
@@ -125,11 +153,14 @@ func run(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	// Create new OAI clients
-//we're calling the function from completion.go file to generate new OpenAIClients
-	oaiClients, err := newOAIClients() //calling the function to create new OAI clients, this func. is in completion.go file
-	if err != nil {
-		return err
+	var oaiClients oaiClients
+	var err error
+	if !useGemini() {
+		// Create new OAI clients when using OpenAI
+		oaiClients, err = newOAIClients()
+		if err != nil {
+			return err
+		}
 	}
 
 	var action, completion string
@@ -147,10 +178,12 @@ func run(args []string) error {
 			s.Start()
 		}
 
-// Calling the gptCompletion func. (in completion.go file) by passing oaiClients which we just created above
-//we also pass context, arguments and DeploymentName to this function
-//gptCompletion gives us the response in string format, this func. is defined in completion.go file
-		completion, err = gptCompletion(ctx, oaiClients, args, *openAIDeploymentName)
+		if useGemini() {
+			completion, err = geminiCompletion(ctx, args, *geminiModel)
+		} else {
+			// Calling the gptCompletion func. (in completion.go file) by passing oaiClients
+			completion, err = gptCompletion(ctx, oaiClients, args, *openAIDeploymentName)
+		}
 		//handling the error for calling the function above
 		if err != nil {
 			return err
