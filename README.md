@@ -1,47 +1,153 @@
-# Kubectl-assistant OpenAI plugin ✨
+# Kubectl Assistant
 
-This is an A.I. powered `kubectl` plugin to generate and apply Kubernetes manifests using OpenAI GPT.
+An AI-powered `kubectl` plugin that generates and applies Kubernetes manifests using OpenAI GPT or Google Gemini.
 
+## Prerequisites
 
-`kubectl-assistant` requires a valid Kubernetes configuration, and make sure your config file is in ~.kube/ and the name of the file is config 
-it also needs one of the following:
+- A valid Kubernetes configuration file located at `~/.kube/config`
 
-- [OpenAI API key](https://platform.openai.com/overview)
-- [Azure OpenAI Service](https://aka.ms/azure-openai) API key and endpoint
-- [Local AI](https://github.com/go-skynet/LocalAI) (see [getting started](https://localai.io/basics/getting_started/index.html))
+## Authentication
 
-For OpenAI, Azure OpenAI or LocalAI, you can use the following environment variables:
-make sure you use the latest 3.5 turbo model to ensure you get to GPT functions
+The plugin requires one of the following API keys:
+
+- **[OpenAI API key](https://platform.openai.com/overview)** — Set `OPENAI_API_KEY` environment variable
+- **[Google Gemini](https://ai.google.dev/gemini-api/docs)** — Free tier available via [Google AI Studio](https://aistudio.google.com/apikey). Set `GEMINI_API_KEY` instead of `OPENAI_API_KEY`
+- **[Local AI](https://github.com/go-skynet/LocalAI)** — See [getting started guide](https://localai.io/basics/getting_started/index.html)
+
+### OpenAI Configuration
+
+For OpenAI or LocalAI, set the following environment variables:
 
 ```shell
-export OPENAI_API_KEY=<your OpenAI key>
+export OPENAI_API_KEY=your_openai_key
 export OPENAI_DEPLOYMENT_NAME=gpt-3.5-turbo-1106
-export OPENAI_ENDPOINT=<your OpenAI endpoint, like "https://my-aoi-endpoint.openai.azure.com" or "http://localhost:8080/v1">
+export OPENAI_ENDPOINT=your_endpoint  # Optional: e.g., "http://localhost:8080/v1"
 ```
 
-If `OPENAI_ENDPOINT` variable is set, then it will use the endpoint. Otherwise, it will use OpenAI API.
+If `OPENAI_ENDPOINT` is set, the plugin will use that endpoint. Otherwise, it defaults to the OpenAI API.
 
-Azure OpenAI service does not allow certain characters, such as `.`, in the deployment name. Consequently, `kubectl-assistant` will automatically replace `gpt-3.5-turbo` to `gpt-35-turbo` for Azure. However, if you use an Azure OpenAI deployment name completely different from the model name, you can set `AZURE_OPENAI_MAP` environment variable to map the model name to the Azure OpenAI deployment name. For example:
+### Gemini Configuration
 
-```shell
-export AZURE_OPENAI_MAP="gpt-3.5-turbo=my-deployment"
+Set only the `GEMINI_API_KEY` environment variable. Do not set `OPENAI_API_KEY` when using Gemini.
+
+> **Note:** The `--use-k8s-api` (function-calling) feature is not supported with Gemini. Use the default prompt-based generation instead.
+
+## Quick Start with Gemini
+
+### Step 1: Install Go
+
+Download and install Go 1.20 or later from [go.dev/dl](https://go.dev/dl/).
+
+### Step 2: Build the Plugin
+
+```powershell
+cd "D:\GO LAMG\kubernetes-assistant-go-master"
+go build -o kubectl-assistant.exe .
 ```
 
-### Flags and environment variables
+### Step 3: Configure Your API Key
 
-- `--require-confirmation` flag or `REQUIRE_CONFIRMATION` environment varible can be set to prompt the user for confirmation before applying the manifest. Defaults to true.
+Obtain a free API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
-- `--temperature` flag or `TEMPERATURE` environment variable can be set between 0 and 1. Higher temperature will result in more creative completions. Lower temperature will result in more deterministic completions. Defaults to 0.
+**PowerShell (current session):**
+```powershell
+$env:GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE"
+```
 
-- `--use-k8s-api` flag or `USE_K8S_API` environment variable can be set to use Kubernetes OpenAPI Spec to generate the manifest. This will result in very accurate completions including CRDs (if present in configured cluster). This setting will use more OpenAI API calls and it requires [function calling](https://openai.com/blog/function-calling-and-other-api-updates) which is available in `0613` or later models only. Defaults to false. However, this is recommended for accuracy and completeness.
+**Command Prompt:**
+```cmd
+set GEMINI_API_KEY=YOUR_GEMINI_API_KEY_HERE
+```
 
-- `--k8s-openapi-url` flag or `K8S_OPENAPI_URL` environment variable can be set to use a custom Kubernetes OpenAPI Spec URL. This is only used if `--use-k8s-api` is set. By default, `kubectl-assistant` will use the configured Kubernetes API Server to get the spec unless this setting is configured. You can use the [default Kubernetes OpenAPI Spec](https://raw.githubusercontent.com/kubernetes/kubernetes/master/api/openapi-spec/swagger.json) or generate a custom spec for completions that includes custom resource definitions (CRDs). You can generate custom OpenAPI Spec by using `kubectl get --raw /openapi/v2 > swagger.json`.
+### Step 4: Run the Assistant
 
-## Examples
+```powershell
+.\kubectl-assistant.exe "create an nginx deployment with 2 replicas"
+```
 
-### Creating objects with specific values
+Alternatively, run without building:
+```powershell
+go run . "create an nginx deployment with 2 replicas"
+```
 
-```shell
+### Optional: Configure Model
+
+The default model is `gemini-2.5-flash`. To use a different model:
+
+```powershell
+$env:GEMINI_MODEL = "gemini-2.0-flash"
+```
+
+## HTTP API
+
+The assistant can run as an HTTP server, enabling integration with web applications.
+
+### Starting the Server
+
+```powershell
+.\kubectl-assistant.exe serve --port 8080
+```
+
+The default port is 8080. Use the `-p` flag to specify a different port.
+
+### API Endpoint
+
+**POST** `http://localhost:8080/generate`
+
+**Request Body:**
+```json
+{
+  "prompt": "create an nginx deployment with 2 replicas"
+}
+```
+
+**Response:**
+```json
+{
+  "manifest": "apiVersion: apps/v1\nkind: Deployment\n..."
+}
+```
+
+### Client Examples
+
+**cURL:**
+```bash
+curl -X POST http://localhost:8080/generate \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "create an nginx deployment with 2 replicas"}'
+```
+
+**JavaScript/React:**
+```javascript
+const response = await fetch('http://localhost:8080/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ prompt: 'create an nginx deployment with 2 replicas' })
+});
+const { manifest } = await response.json();
+```
+
+CORS is enabled for browser-based clients.
+
+## Configuration Flags
+
+| Flag | Environment Variable | Description | Default |
+|------|---------------------|-------------|---------|
+| `--require-confirmation` | `REQUIRE_CONFIRMATION` | Prompt for confirmation before applying manifests | `true` |
+| `--temperature` | `TEMPERATURE` | Controls randomness (0.0 = deterministic, 1.0 = creative) | `0` |
+| `--use-k8s-api` | `USE_K8S_API` | Use Kubernetes OpenAPI Spec for accurate completions including CRDs | `false` |
+| `--k8s-openapi-url` | `K8S_OPENAPI_URL` | Custom Kubernetes OpenAPI Spec URL | Kubernetes API Server |
+
+### Notes
+
+- The `--use-k8s-api` flag requires a model that supports [function calling](https://openai.com/blog/function-calling-and-other-api-updates) (GPT-3.5 0613 or later). This option is recommended for accuracy and completeness.
+- To generate a custom OpenAPI spec that includes CRDs: `kubectl get --raw /openapi/v2 > swagger.json`
+
+## Usage Examples
+
+### Create a Deployment
+
+```bash
 $ go run main.go "create an nginx deployment with 3 replicas"
 ✨ Attempting to apply the following manifest:
 apiVersion: apps/v1
@@ -72,9 +178,9 @@ Use the arrow keys to navigate: ↓ ↑ → ←
     Don't Apply
 ```
 
-### Reprompt to refine your prompt
+### Reprompt to Refine Your Prompt
 
-```shell
+```bash
 ...
 Reprompt: update to 5 replicas and port 8080
 ✨ Attempting to apply the following manifest:
@@ -106,9 +212,9 @@ Use the arrow keys to navigate: ↓ ↑ → ←
     Don't Apply
 ```
 
-### Multiple objects
+### Create Multiple Resources
 
-```shell
+```bash
 $ go run main.go "create a foo namespace then create nginx pod in that namespace"
 ✨ Attempting to apply the following manifest:
 apiVersion: v1
@@ -132,9 +238,9 @@ Use the arrow keys to navigate: ↓ ↑ → ←
     Don't Apply
 ```
 
-### Optional `--require-confirmation` flag
+### Skip Confirmation
 
-```shell
+```bash
 $ go run main.go "create a service with type LoadBalancer with selector as 'app:nginx'" --require-confirmation=false
 ✨ Attempting to apply the following manifest:
 apiVersion: v1
@@ -150,4 +256,6 @@ spec:
   type: LoadBalancer
 ```
 
-> Please note that the plugin does not know the current state of the cluster (yet?), so it will always generate the full manifest.
+---
+
+**Note:** The plugin generates complete manifests based on your prompt and does not track the current cluster state.
